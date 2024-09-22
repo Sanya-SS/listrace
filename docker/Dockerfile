@@ -5,7 +5,7 @@ FROM nginx:latest
 WORKDIR /usr/share/nginx/html
 
 # Step 3: Copy the local website files to the container
-COPY ./listrace-v1.0 /usr/share/nginx/html
+COPY . /usr/share/nginx/html
 
 # Step 4: Expose port 80 to allow external access
 EXPOSE 8070
