@@ -1,0 +1,115 @@
+pipeline {
+    agent any
+
+    environment {
+        SCANNER_HOME = tool 'sonar-scanner'  // SonarQube environment name defined in Jenkins
+       // DOCKER_REGISTRY_URL = 'https://index.docker.io/v1/'  // Replace with your registry URL
+    //    DOCKER_CREDENTIALS_ID = 'docker-credentials-id'  // Replace with your Docker credentials ID
+    }
+
+    stages {
+        stage('Pre Build Clean Up'){
+            steps{
+                cleanWs()
+            }
+        }
+        stage('Clone Repository') {
+            steps {
+                git branch: 'main', url: 'https://github.com/Sanya-SS/listrace.git'
+            }
+        }
+
+       stage('Gitleaks Scan') {
+            steps {
+                script {
+                    sh 'gitleaks detect --source . --report-path gitleaks-report.json --verbose'
+                }
+            }
+            post {
+                always {
+                    archiveArtifacts artifacts: 'gitleaks-report.json', allowEmptyArchive: true
+                }
+            }
+        }
+        
+        stage('SonarQube Scan') {
+            steps {
+                withSonarQubeEnv('sonarqube') {
+                    sh '''
+                        $SCANNER_HOME/bin/sonar-scanner -Dsonar.projectName=Listrace-Website -Dsonar.projectKey=Listrace-Website \
+                        -Dsonar.sources=. 
+                    '''
+                    //-Dsonar.qualitygate.wait=true -Dsonar.qualitygate.timeout=300
+                }
+            }
+        }
+
+        stage('Dependency Check') {
+            steps {
+                dependencyCheck additionalArguments: '', nvdCredentialsId: 'nvd-key', odcInstallation: 'dependency-check'
+                
+            }
+            post {
+                always {
+                    dependencyCheckPublisher pattern: 'dependency-check-report.xml'
+                    archiveArtifacts artifacts: '**/dependency-check-report.xml', allowEmptyArchive: true
+                }
+            }
+        }
+        stage('Docker Build'){
+            steps{
+                script{
+                    //withDockerRegistry(credentialsId: 'dockerhub', toolName: 'Docker', url: 'https://hub.docker.com/r/sanya11/listrace') {
+                        sh 'docker login -u sanya11 -p dzire2205'
+                        sh 'docker system prune'
+                        sh 'docker build -t listrace:latest -f docker/Dockerfile .'
+                        sh 'docker tag listrace sanya11/listrace:latest'
+                    //    sh 'docker push sanya11/listrace:latest'
+                    //}
+                }
+            }
+        }
+        stage('Grype Scan'){
+            steps{
+                grypeScan autoInstall: true, repName: 'grypeReport_${JOB_NAME}_${BUILD_NUMBER}.txt', scanDest: 'docker:sanya11/listrace:latest'
+            }
+        }
+        stage('Docker Image Push'){
+            steps{
+                script{
+                        sh 'docker login -u sanya11 -p dzire2205'
+                        sh 'docker push sanya11/listrace:latest'
+                }
+            }
+        }
+        stage('Deploying Website'){
+            steps{
+                script{
+                    sshagent(['ubuntu']) {
+                        sh 'ssh -o StrictHostKeyChecking=no ubuntu@65.2.69.95'
+                        sh 'docker pull sanya11/listrace:latest && ls'
+                        sh 'docker stop $(docker ps -a -q)'
+                        sh 'docker remove $(docker ps -a -q)'
+                        sh 'docker run -p 80:80 -d sanya11/listrace:latest'
+                    }
+                    /*sh 'ssh ubuntu@13.235.90.12 && ls'
+                    sh 'docker pull sanya11/listrace && ls'
+                    sh 'docker listrace_container || true'
+                    sh 'docker rm listrace_container || true'
+                    sh 'docker run -d --name listrace_container -p 3000:3000 sanya11/listrace'
+
+                    ssh2easy(credentialsId: 'listrace-ssh-key', host:'13.235.90.12'){
+                    sh """
+                    ssh -o StrictHostKeyChecking=no ubuntu@13.235.90.12 << EOF
+                        docker pull sanya11/listrace
+                        docker listrace_container || true
+                        docker rm listrace_container || true
+                        docker run -d --name listrace_container -p 3000:3000 sanya11/listrace
+                    EOF
+                """
+                    }*/
+                }
+            }
+        }
+    }
+}
